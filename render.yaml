@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: esp8266-cloud
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2
+    envVars:
+      - key: GMAIL_USER
+        sync: false        # setezi manual în Render dashboard
+      - key: GMAIL_PASS
+        sync: false
+      - key: ALERT_EMAIL
+        sync: false
+      - key: API_KEY
+        sync: false
+    disk:
+      name: esp-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
