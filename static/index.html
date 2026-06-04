@@ -258,7 +258,7 @@
     <div class="logo"><span>//</span> ESP8266 <span>CTRL</span></div>
     <div class="ip-row">
       <div class="dot off" id="connDot"></div>
-      <input class="ip-input" id="espIp" placeholder="192.168.4.1" value="192.168.4.1">
+      <input class="ip-input" id="espIp" value="esp8266.local" readonly>
     </div>
   </div>
 
@@ -365,7 +365,7 @@ let selectedNetworkId = null;
 let isConnected = false;
 
 function ESP(cmd) {
-  const ip = document.getElementById('espIp').value.trim() || '192.168.4.1';
+  const ip = document.getElementById('espIp').value.trim() || 'esp8266.local';
   return 'http://' + ip + '/cmd?c=' + encodeURIComponent(cmd);
 }
 
