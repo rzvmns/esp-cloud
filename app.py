@@ -101,7 +101,7 @@ def esp_flood_event():
     data  = request.get_json(silent=True) or {}
     value = str(data.get("value", "?"))
     ts    = now_ts()
-    print(f"[FLOOD] Primit! value={value} GMAIL_USER={GMAIL_USER} ALERT_EMAIL={ALERT_EMAIL}")  # adaugă ast
+    print(f"[FLOOD] Primit! value={value} SENDER_EMAIL={SENDER_EMAIL} ALERT_EMAIL={ALERT_EMAIL}")  # adaugă ast
     with get_conn() as conn:
         with conn.cursor() as cur:
             # Păstrează ultimele 10
