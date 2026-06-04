@@ -4,9 +4,10 @@ Arhitectura: Browser <-> Flask (Render) <-> ESP8266 (polling)
 Persistență: PostgreSQL (Render free tier)
 """
 
-import os, smtplib, threading
+import os, threading
 from datetime import datetime, timezone
-from email.mime.text import MIMEText
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 from flask import Flask, request, jsonify, send_from_directory
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -14,8 +15,8 @@ from psycopg2.extras import RealDictCursor
 app = Flask(__name__, static_folder="static")
 
 # ── CONFIG (setezi în Render > Environment) ───────────────────
-GMAIL_USER  = os.environ.get("GMAIL_USER", "")
-GMAIL_PASS  = os.environ.get("GMAIL_PASS", "")
+SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY", "")
+SENDER_EMAIL     = os.environ.get("SENDER_EMAIL", "")
 ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "")
 API_KEY     = os.environ.get("API_KEY", "changeme")
 DATABASE_URL = os.environ.get("DATABASE_URL", "")  # automat de Render
@@ -52,18 +53,19 @@ def now_ts():
 
 def send_email_async(subject, body):
     def _send():
-        if not GMAIL_USER or not GMAIL_PASS or not ALERT_EMAIL:
+        if not SENDGRID_API_KEY or not ALERT_EMAIL:
             print("[EMAIL] Credențiale lipsă.")
             return
         try:
-            msg = MIMEText(body)
-            msg["Subject"] = subject
-            msg["From"]    = GMAIL_USER
-            msg["To"]      = ALERT_EMAIL
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
-                s.login(GMAIL_USER, GMAIL_PASS)
-                s.sendmail(GMAIL_USER, ALERT_EMAIL, msg.as_string())
-            print(f"[EMAIL] Trimis: {subject}")
+            msg = Mail(
+                from_email=SENDER_EMAIL,
+                to_emails=ALERT_EMAIL,
+                subject=subject,
+                plain_text_content=body
+            )
+            sg = SendGridAPIClient(SENDGRID_API_KEY)
+            sg.send(msg)
+            print(f"[EMAIL] Trimis OK")
         except Exception as e:
             print(f"[EMAIL] Eroare: {e}")
     threading.Thread(target=_send, daemon=True).start()
@@ -111,17 +113,10 @@ def esp_flood_event():
             """)
         conn.commit()
 
-    try:
-        msg = MIMEText(f"Flood detectat!\nValoare ADC: {value}\nTimestamp: {ts}")
-        msg["Subject"] = f"FLOOD DETECTED — {ts}"
-        msg["From"]    = GMAIL_USER
-        msg["To"]      = ALERT_EMAIL
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
-            s.login(GMAIL_USER, GMAIL_PASS)
-            s.sendmail(GMAIL_USER, ALERT_EMAIL, msg.as_string())
-        print(f"[EMAIL] Trimis OK")
-    except Exception as e:
-        print(f"[EMAIL] Eroare: {e}")
+    send_email_async(
+        subject=f"⚠️ FLOOD DETECTED — {ts}",
+        body=f"Senzorul de inundație a detectat apă.\n\nValoare ADC: {value}\nTimestamp: {ts}\n\nVerifică sistemul!"
+    )
 
     return jsonify({"status": "ok", "ts": ts})
 
