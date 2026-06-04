@@ -111,10 +111,17 @@ def esp_flood_event():
             """)
         conn.commit()
 
-    send_email_async(
-        subject=f"⚠️ FLOOD DETECTED — {ts}",
-        body=f"Senzorul de inundație a detectat apă.\n\nValoare ADC: {value}\nTimestamp: {ts}\n\nVerifică sistemul!"
-    )
+    try:
+        msg = MIMEText(f"Flood detectat!\nValoare ADC: {value}\nTimestamp: {ts}")
+        msg["Subject"] = f"FLOOD DETECTED — {ts}"
+        msg["From"]    = GMAIL_USER
+        msg["To"]      = ALERT_EMAIL
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
+            s.login(GMAIL_USER, GMAIL_PASS)
+            s.sendmail(GMAIL_USER, ALERT_EMAIL, msg.as_string())
+        print(f"[EMAIL] Trimis OK")
+    except Exception as e:
+        print(f"[EMAIL] Eroare: {e}")
 
     return jsonify({"status": "ok", "ts": ts})
 
