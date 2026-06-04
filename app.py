@@ -1,38 +1,49 @@
 """
 ESP8266 Cloud Relay — Flask backend pentru Render
 Arhitectura: Browser <-> Flask (Render) <-> ESP8266 (polling)
+Persistență: PostgreSQL (Render free tier)
 """
 
-import os, json, smtplib, threading
+import os, smtplib, threading
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from flask import Flask, request, jsonify, send_from_directory
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 app = Flask(__name__, static_folder="static")
 
 # ── CONFIG (setezi în Render > Environment) ───────────────────
-GMAIL_USER    = os.environ.get("GMAIL_USER", "")       # ex: tine@gmail.com
-GMAIL_PASS    = os.environ.get("GMAIL_PASS", "")       # App Password Gmail
-ALERT_EMAIL   = os.environ.get("ALERT_EMAIL", "")      # unde trimiți alertele
-API_KEY       = os.environ.get("API_KEY", "changeme")  # cheie simplă anti-spam
+GMAIL_USER  = os.environ.get("GMAIL_USER", "")
+GMAIL_PASS  = os.environ.get("GMAIL_PASS", "")
+ALERT_EMAIL = os.environ.get("ALERT_EMAIL", "")
+API_KEY     = os.environ.get("API_KEY", "changeme")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")  # automat de Render
 
-# ── PERSISTENȚĂ (fișiere JSON în /data) ───────────────────────
-DATA_DIR      = "data"
-MESSAGES_FILE = os.path.join(DATA_DIR, "messages.json")
-FLOODS_FILE   = os.path.join(DATA_DIR, "floods.json")
+# ── DB HELPERS ────────────────────────────────────────────────
 
-os.makedirs(DATA_DIR, exist_ok=True)
+def get_conn():
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
-def read_json(path, default):
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except Exception:
-        return default
-
-def write_json(path, data):
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
+def init_db():
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS messages (
+                    id        SERIAL PRIMARY KEY,
+                    text      TEXT NOT NULL,
+                    ts        TEXT NOT NULL,
+                    delivered BOOLEAN DEFAULT FALSE
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS floods (
+                    id    SERIAL PRIMARY KEY,
+                    ts    TEXT NOT NULL,
+                    value TEXT NOT NULL
+                );
+            """)
+        conn.commit()
 
 # ── HELPERS ───────────────────────────────────────────────────
 
@@ -40,10 +51,9 @@ def now_ts():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 def send_email_async(subject, body):
-    """Trimite email în thread separat ca să nu blocheze request-ul."""
     def _send():
         if not GMAIL_USER or not GMAIL_PASS or not ALERT_EMAIL:
-            print("[EMAIL] Credențiale lipsă, emailul nu a fost trimis.")
+            print("[EMAIL] Credențiale lipsă.")
             return
         try:
             msg = MIMEText(body)
@@ -66,41 +76,40 @@ def check_api_key():
 
 @app.route("/esp/messages/pending")
 def esp_get_pending():
-    """
-    ESP face GET la această rută periodic.
-    Returnează mesajele neprelucrate și le marchează ca livrate.
-    """
     if not check_api_key():
         return jsonify({"error": "unauthorized"}), 401
 
-    messages = read_json(MESSAGES_FILE, [])
-    pending  = [m for m in messages if not m.get("delivered")]
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, text FROM messages WHERE delivered = FALSE ORDER BY id")
+            pending = cur.fetchall()
+            if pending:
+                ids = [m["id"] for m in pending]
+                cur.execute("UPDATE messages SET delivered = TRUE WHERE id = ANY(%s)", (ids,))
+        conn.commit()
 
-    for m in messages:
-        if not m.get("delivered"):
-            m["delivered"] = True
-
-    write_json(MESSAGES_FILE, messages)
     return jsonify({"messages": [m["text"] for m in pending]})
 
 
 @app.route("/esp/flood", methods=["POST"])
 def esp_flood_event():
-    """
-    ESP trimite POST când detectează inundație.
-    Body JSON: {"value": 450}
-    """
     if not check_api_key():
         return jsonify({"error": "unauthorized"}), 401
 
-    data   = request.get_json(silent=True) or {}
-    value  = data.get("value", "?")
-    ts     = now_ts()
+    data  = request.get_json(silent=True) or {}
+    value = str(data.get("value", "?"))
+    ts    = now_ts()
 
-    floods = read_json(FLOODS_FILE, [])
-    floods.append({"ts": ts, "value": value})
-    floods = floods[-10:]   # păstrează ultimele 10
-    write_json(FLOODS_FILE, floods)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Păstrează ultimele 10
+            cur.execute("INSERT INTO floods (ts, value) VALUES (%s, %s)", (ts, value))
+            cur.execute("""
+                DELETE FROM floods WHERE id NOT IN (
+                    SELECT id FROM floods ORDER BY id DESC LIMIT 10
+                )
+            """)
+        conn.commit()
 
     send_email_async(
         subject=f"⚠️ FLOOD DETECTED — {ts}",
@@ -114,65 +123,61 @@ def esp_flood_event():
 
 @app.route("/api/messages", methods=["GET"])
 def api_get_messages():
-    """Returnează toate mesajele (pentru UI)."""
-    messages = read_json(MESSAGES_FILE, [])
-    return jsonify(messages)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM messages ORDER BY id")
+            return jsonify(cur.fetchall())
 
 
 @app.route("/api/messages", methods=["POST"])
 def api_send_message():
-    """
-    Browserul trimite un mesaj nou din Cloud spre ESP.
-    Body JSON: {"text": "hello esp"}
-    """
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
     if not text:
         return jsonify({"error": "text required"}), 400
 
-    messages = read_json(MESSAGES_FILE, [])
-    messages.append({
-        "id":        len(messages),
-        "text":      text,
-        "ts":        now_ts(),
-        "delivered": False
-    })
-    messages = messages[-10:]   # păstrează ultimele 10
-    write_json(MESSAGES_FILE, messages)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO messages (text, ts) VALUES (%s, %s)", (text, now_ts()))
+            # Păstrează ultimele 10
+            cur.execute("""
+                DELETE FROM messages WHERE id NOT IN (
+                    SELECT id FROM messages ORDER BY id DESC LIMIT 10
+                )
+            """)
+        conn.commit()
 
-    return jsonify({"status": "queued", "total": len(messages)})
+    return jsonify({"status": "queued"})
 
 
 @app.route("/api/messages/<int:msg_id>", methods=["DELETE"])
 def api_delete_message(msg_id):
-    """Șterge un mesaj după id."""
-    messages = read_json(MESSAGES_FILE, [])
-    messages = [m for m in messages if m.get("id") != msg_id]
-    write_json(MESSAGES_FILE, messages)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM messages WHERE id = %s", (msg_id,))
+        conn.commit()
     return jsonify({"status": "deleted"})
 
 
 @app.route("/api/floods", methods=["GET"])
 def api_get_floods():
-    """Returnează istoricul de inundații (pentru UI)."""
-    floods = read_json(FLOODS_FILE, [])
-    return jsonify(floods)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM floods ORDER BY id")
+            return jsonify(cur.fetchall())
 
 
-@app.route("/api/floods/<int:idx>", methods=["DELETE"])
-def api_delete_flood(idx):
-    """Șterge un eveniment de inundație după index."""
-    floods = read_json(FLOODS_FILE, [])
-    if 0 <= idx < len(floods):
-        floods.pop(idx)
-        write_json(FLOODS_FILE, floods)
-        return jsonify({"status": "deleted"})
-    return jsonify({"error": "invalid index"}), 400
+@app.route("/api/floods/<int:flood_id>", methods=["DELETE"])
+def api_delete_flood(flood_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM floods WHERE id = %s", (flood_id,))
+        conn.commit()
+    return jsonify({"status": "deleted"})
 
 
 @app.route("/api/status")
 def api_status():
-    """Health check."""
     return jsonify({"status": "online", "ts": now_ts()})
 
 
@@ -185,6 +190,12 @@ def serve_static(path):
         return send_from_directory("static", path)
     return send_from_directory("static", "index.html")
 
+
+# ── INIT ──────────────────────────────────────────────────────
+
+with app.app_context():
+    if DATABASE_URL:
+        init_db()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
