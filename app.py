@@ -4,7 +4,7 @@ Arhitectura: Browser <-> Flask (Render) <-> ESP8266 (polling)
 Persistență: PostgreSQL (Render free tier)
 """
 
-import os, smtplib, threading, requests as req_lib
+import os, smtplib, threading
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from flask import Flask, request, jsonify, send_from_directory
@@ -180,25 +180,6 @@ def api_delete_flood(flood_id):
 def api_status():
     return jsonify({"status": "online", "ts": now_ts()})
 
-
-# ── PROXY SPRE ESP ────────────────────────────────────────────
-
-@app.route("/proxy")
-def proxy():
-    """
-    Browserul trimite: GET /proxy?ip=192.168.0.103&c=temp
-    Flask trimite mai departe la ESP și returnează răspunsul.
-    Rezolvă CORS și mixed-content (HTTP vs HTTPS).
-    """
-    ip  = request.args.get("ip", "").strip()
-    cmd = request.args.get("c",  "").strip()
-    if not ip or not cmd:
-        return "missing ip or cmd", 400
-    try:
-        r = req_lib.get(f"http://{ip}/cmd", params={"c": cmd}, timeout=8)
-        return r.text, r.status_code, {"Content-Type": "text/plain"}
-    except Exception as e:
-        return f"ESP unreachable: {e}", 502
 
 # ── SERVIRE FRONTEND STATIC ───────────────────────────────────
 

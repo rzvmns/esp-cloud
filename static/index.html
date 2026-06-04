@@ -366,7 +366,7 @@ let isConnected = false;
 
 function ESP(cmd) {
   const ip = document.getElementById('espIp').value.trim() || '192.168.4.1';
-  return '/proxy?ip=' + encodeURIComponent(ip) + '&c=' + encodeURIComponent(cmd);
+  return 'http://' + ip + '/cmd?c=' + encodeURIComponent(cmd);
 }
 
 function updateConnectionUI() {
