@@ -364,8 +364,9 @@
 let selectedNetworkId = null;
 let isConnected = false;
 
-function ESP() {
-  return 'http://' + (document.getElementById('espIp').value.trim() || '192.168.4.1');
+function ESP(cmd) {
+  const ip = document.getElementById('espIp').value.trim() || '192.168.4.1';
+  return '/proxy?ip=' + encodeURIComponent(ip) + '&c=' + encodeURIComponent(cmd);
 }
 
 function updateConnectionUI() {
@@ -392,14 +393,14 @@ function setOutput(text, type) {
 
 function sendCmd(cmd) {
   showLoading();
-  fetch(ESP() + '/cmd?c=' + encodeURIComponent(cmd))
+  fetch(ESP(cmd))
     .then(r => r.text()).then(t => setOutput(t))
     .catch(() => setOutput('CONNECTION FAILED', 'error'));
 }
 
 function refreshTemp() {
   showLoading();
-  fetch(ESP() + '/cmd?c=temp').then(r => r.text()).then(t => {
+  fetch(ESP('temp')).then(r => r.text()).then(t => {
     const m = t.match(/Temp:\s*([\d.]+)C\s+Hum:\s*([\d.]+)/);
     if (m) {
       document.getElementById('tempVal').innerText = parseFloat(m[1]).toFixed(1) + '°C';
@@ -414,7 +415,7 @@ function refreshTemp() {
 
 function refreshFlood() {
   showLoading();
-  fetch(ESP() + '/cmd?c=flood').then(r => r.text()).then(t => {
+  fetch(ESP('flood')).then(r => r.text()).then(t => {
     const flooded = t.toLowerCase().includes('flood detected');
     const card = document.getElementById('floodCard');
     const val  = document.getElementById('floodVal');
@@ -436,7 +437,7 @@ function refreshFlood() {
 }
 
 function loadFloodLog() {
-  fetch(ESP() + '/cmd?c=flood-events').then(r => r.text()).then(t => {
+  fetch(ESP('flood-events')).then(r => r.text()).then(t => {
     const el = document.getElementById('floodLogEntries');
     if (t.trim() === 'No events') {
       el.innerHTML = '<span class="flood-empty">NO EVENTS RECORDED</span>';
@@ -459,7 +460,7 @@ function loadFloodLog() {
 
 function loadFloodEventsModal() {
   showLoading();
-  fetch(ESP() + '/cmd?c=flood-events').then(r => r.text()).then(text => {
+  fetch(ESP('flood-events')).then(r => r.text()).then(text => {
     const list  = document.getElementById('floodList');
     const empty = document.getElementById('floodEmpty');
     list.innerHTML = '';
@@ -483,12 +484,12 @@ function loadFloodEventsModal() {
 }
 
 function deleteFloodEvent(idx) {
-  fetch(ESP() + '/cmd?c=flood-delete ' + idx).then(() => loadFloodLog());
+  fetch(ESP('flood-delete ' + idx)).then(() => loadFloodLog());
 }
 
 function deleteFloodEventModal(idx, btn) {
   btn.disabled = true; btn.innerText = '...';
-  fetch(ESP() + '/cmd?c=flood-delete ' + idx).then(() => {
+  fetch(ESP('flood-delete ' + idx)).then(() => {
     closeModal('floodModal');
     loadFloodEventsModal();
     loadFloodLog();
@@ -500,14 +501,14 @@ function sendMessage() {
   const msg = input.value.trim();
   if (!msg) return;
   showLoading();
-  fetch(ESP() + '/cmd?c=' + encodeURIComponent('send-message ' + msg))
+  fetch(ESP('send-message ' + msg))
     .then(r => r.text()).then(t => { input.value = ''; setOutput(t); })
     .catch(() => setOutput('CONNECTION FAILED', 'error'));
 }
 
 function loadMessages() {
   showLoading();
-  fetch(ESP() + '/cmd?c=messages').then(r => r.text()).then(text => {
+  fetch(ESP('messages')).then(r => r.text()).then(text => {
     const list = document.getElementById('messagesList');
     list.innerHTML = '';
     if (text.trim() === 'No messages') {
@@ -528,7 +529,7 @@ function loadMessages() {
 
 function scanWifi() {
   showLoading();
-  fetch(ESP() + '/cmd?c=scan').then(r => r.text()).then(showNetworks)
+  fetch(ESP('scan')).then(r => r.text()).then(showNetworks)
     .catch(() => setOutput('CONNECTION FAILED', 'error'));
 }
 
@@ -566,20 +567,20 @@ function connectNetwork(id, password) {
   closeModal('wifiModal');
   showLoading();
   let cmd = 'connect ' + id + (password ? ' ' + password : '');
-  fetch(ESP() + '/cmd?c=' + encodeURIComponent(cmd)).then(r => r.text()).then(t => setOutput(t))
+  fetch(ESP(cmd)).then(r => r.text()).then(t => setOutput(t))
     .catch(() => setOutput('CONNECTION FAILED', 'error'));
 }
 
 function disconnectWifi() {
   showLoading();
-  fetch(ESP() + '/cmd?c=disconnect').then(r => r.text()).then(t => {
+  fetch(ESP('disconnect')).then(r => r.text()).then(t => {
     isConnected = false; setOutput(t);
   }).catch(() => setOutput('CONNECTION FAILED', 'error'));
 }
 
 function showStatus() {
   document.getElementById('statusContent').innerHTML = '<span class="spinner"></span>';
-  fetch(ESP() + '/cmd?c=status').then(r => r.text()).then(text => {
+  fetch(ESP('status')).then(r => r.text()).then(text => {
     document.getElementById('statusContent').innerText = text;
     isConnected = text.toLowerCase().includes('connected to');
     updateConnectionUI();
@@ -589,7 +590,7 @@ function showStatus() {
 
 function loadSavedNetworks() {
   showLoading();
-  fetch(ESP() + '/cmd?c=saved').then(r => r.text()).then(text => {
+  fetch(ESP('saved')).then(r => r.text()).then(text => {
     const list = document.getElementById('savedList');
     list.innerHTML = '';
     text.split('\n').forEach(line => {
@@ -607,7 +608,7 @@ function loadSavedNetworks() {
 function connectSaved(ssid) {
   closeModal('savedModal');
   showLoading();
-  fetch(ESP() + '/cmd?c=connect-saved ' + encodeURIComponent(ssid)).then(r => r.text()).then(t => setOutput(t))
+  fetch(ESP('connect-saved ' + ssid)).then(r => r.text()).then(t => setOutput(t))
     .catch(() => setOutput('CONNECTION FAILED', 'error'));
 }
 
@@ -620,7 +621,7 @@ document.querySelectorAll('.modal-overlay').forEach(m => {
 
 window.onload = () => {
   showLoading();
-  fetch(ESP() + '/cmd?c=status').then(r => r.text()).then(t => setOutput(t))
+  fetch(ESP('status')).then(r => r.text()).then(t => setOutput(t))
     .catch(() => setOutput('ESP OFFLINE', 'error'));
   loadFloodLog();
 };
